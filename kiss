@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # shellcheck source=/dev/null
 #
 # This is a simple package manager written in POSIX shell for use
@@ -138,6 +138,18 @@ pkg_lint() {
     [ -f sources ] || war "$1" "Sources file not found"
 }
 
+pkg_source_query() {
+	IFS=;
+	pkg_dir=$1 key=$2
+	source $pkg_dir/PKGBUILD
+	arr="$key[@]"
+	if [[ -n ${!key} ]]; then
+		for i in "${!arr}"; do printf '%s\n' "$i"; done
+	fi
+}
+
+
+
 pkg_find() {
     # Figure out which repository a package belongs to by searching for
     # directories matching the package name in $KISS_PATH/*.
@@ -203,7 +215,7 @@ pkg_sources() {
     # Download any remote package sources. The existence of local files is
     # also checked.
     repo_dir=$(pkg_find "$1")
-
+	
     # Support packages without sources. Simply do nothing.
     [ -f "$repo_dir/sources" ] || return 0
 
@@ -214,8 +226,9 @@ pkg_sources() {
     # of the same name.
     mkdir -p "$src_dir/$1" && cd "$src_dir/$1"
 
-    while read -r src dest || [ "$src" ]; do
-        # Remote git repository or comment.
+	sources=$(pkg_source_query $repo_dir "source")
+	while read -r src dest || [ "$src" ]; do
+		# Remote git repository or comment.
         if [ -z "${src##\#*}" ] || [ -z "${src##git+*}" ]; then
             :
 
@@ -244,7 +257,8 @@ pkg_sources() {
         else
             die "$1" "No local file '$src'"
         fi
-    done < "$repo_dir/sources"
+	done < <(echo "$sources")
+
 }
 
 pkg_extract() {
@@ -257,6 +271,7 @@ pkg_extract() {
 
     log "$1" "Extracting sources"
 
+	sources=$(pkg_source_query $repo_dir "source")
     while read -r src dest || [ "$src" ]; do
         mkdir -p "$mak_dir/$1/$dest" && cd "$mak_dir/$1/$dest"
 
@@ -289,7 +304,7 @@ pkg_extract() {
                 # Iterate over all directories in the first level of the
                 # tarball's manifest. This is our equivalent of GNU tar's
                 # '--strip-components 1'.
-                tar tf .ktar | while IFS=/ read -r dir _; do
+				[[ -z "$dest" ]] || tar tf .ktar | while IFS=/ read -r dir _; do
                     # Some tarballs contain './' as the top-level directory,
                     # we need to skip these occurances.
                     [ -d "${dir#.}" ] || continue
@@ -360,7 +375,7 @@ pkg_extract() {
                 fi
             ;;
         esac
-    done < "$repo_dir/sources"
+	done < <(echo "$sources")
 }
 
 pkg_depends() {
@@ -665,17 +680,23 @@ pkg_build() {
 
         log "$pkg" "Starting build"
         run_hook pre-build "$pkg" "$pkg_dir/$pkg"
+		
+		source "$repo_dir/PKGBUILD"
+		set -e
+		srcdir="$mak_dir/$pkg"
+		pkgdir="$pkg_dir/$pkg"
+		prepare
 
         # Call the build script, log the output to the terminal and to a file.
         # There's no PIPEFAIL in POSIX shelll so we must resort to tricks like
         # killing the script ourselves.
-        { "$repo_dir/build" "$pkg_dir/$pkg" "$build_version" 2>&1 || {
-            log "$pkg" "Build failed"
-            log "$pkg" "Log stored to $log_dir/$pkg-$time-$pid"
-            run_hook build-fail "$pkg" "$pkg_dir/$pkg"
-            pkg_clean
-            kill 0
-        } } | tee "$log_dir/$pkg-$time-$pid"
+        #{ "$repo_dir/build" "$pkg_dir/$pkg" "$build_version" 2>&1 || {
+        #    log "$pkg" "Build failed"
+        #    log "$pkg" "Log stored to $log_dir/$pkg-$time-$pid"
+        #    run_hook build-fail "$pkg" "$pkg_dir/$pkg"
+        #    pkg_clean
+        #    kill 0
+        #} } | tee "$log_dir/$pkg-$time-$pid"
 
         # Delete the log file if the build succeeded to prevent the directory
         # from filling very quickly with useless logs.
