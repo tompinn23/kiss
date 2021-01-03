@@ -11,7 +11,7 @@ url="https://www.zlib.net/"
 depends=('glibc')
 options=('staticlibs')  # needed by binutils testsuite
 source=("https://zlib.net/zlib-${pkgver}.tar.gz.asc"
-		"https://zlib.net/zlib-${pkgver}.tar.gz zlib")
+		"https://zlib.net/zlib-${pkgver}.tar.gz")
 md5sums=('1c9f62f0778697a09d36121ead88e08e'
          'SKIP')
 validpgpkeys=('5ED46A6721D365587791E2AA783FCD8E58BCAFBA')
@@ -42,7 +42,7 @@ check() {
 	make -f Makefile.orig test
 }
 
-package_zlib() {
+package() {
 	pkgdesc='Compression library implementing the deflate compression method found in gzip and PKZIP'
 
 	cd ${srcdir}/zlib-$pkgver
