@@ -1,0 +1,9 @@
+pkgname=fakeroot
+pkgver=1.25.3
+pkgrel=1
+pkgdesc='Tool for simulating superuser privileges'
+arch=('x86_64')
+license=('GPL')
+url='https://tracker.debian.org/pkg/fakeroot'
+depends=('musl' 'sed' 'sh')
+makedepends=('po4a')

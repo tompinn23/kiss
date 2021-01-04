@@ -130,12 +130,15 @@ sh256() {
 pkg_lint() {
     log "$1" "Checking repository files"
 
-    cd "$(pkg_find "$1")"
-    read -r _ release 2>/dev/null < version || die "Version file not found"
+    repo_dir="$(pkg_find "$1")"
+	version="$(pkg_source_query "$repo_dir" "pkgver")"
+	[ -z "$version" ] || die "Package Version not found."
+	#read -r _ release 2>/dev/null < version || die "Version file not found"
 
-    [ "$release" ] || die "$1" "Release field not found in version file"
-    [ -x build ]   || die "$1" "Build file not found or not executable"
-    [ -f sources ] || war "$1" "Sources file not found"
+#    [ "$release" ] || die "$1" "Release field not found in version file"
+#    [ -x build ]   || die "$1" "Build file not found or not executable"
+	#    [ -f sources ] || war "$1" "Sources file not found"
+
 }
 
 pkg_source_query() {
@@ -385,10 +388,12 @@ pkg_depends() {
         # Filter out non-explicit, aleady installed dependencies.
         [ "$3" ] && [ -z "$2" ] && (pkg_list "$1" >/dev/null) && return
 
+        dependencies=$(pkg_source_query "$(pkg_find "$1")" "depends")
+        printf "%s\n" $dependencies
         # Recurse through the dependencies of the child packages.
         while read -r dep _ || [ "$dep" ]; do
             [ "${dep##\#*}" ] && pkg_depends "$dep" '' "$3"
-        done 2>/dev/null < "$(pkg_find "$1")/depends" ||:
+        done 2>/dev/null < <(echo "$dependencies") ||:
 
         # After child dependencies are added to the list,
         # add the package which depends on them.
@@ -824,14 +829,15 @@ pkg_checksums() {
     # Generate checksums for packages.
     repo_dir=$(pkg_find "$1")
 
-    # Support packages without sources. Simply do nothing.
-    [ -f "$repo_dir/sources" ] || return 0
 
+    # Support packages without sources. Simply do nothing.
+    #[ -f "$repo_dir/sources" ] || return 0
+
+	sources=$(pkg_source_query $repo_dir "source")
     while read -r src dest || [ "$src" ]; do
         # Skip comments, blank lines and git sources.
-        if [ -z "${src##\#*}" ] || [ -z "${src##git+*}" ]; then
+        if [ -z "${src##\#*}" ] || [ -z "${src##git+*}" ] || [ -z "${src##SKIP}" ]; then
             :
-
         # Remote source.
         elif [ -z "${src##*://*}" ]; then
             sh256 "$src_dir/$1/${dest:-.}/${src##*/}"
@@ -848,7 +854,7 @@ pkg_checksums() {
         elif [ -f "/$src" ]; then
             sh256 "/$src"
         fi
-    done < "$repo_dir/sources" || die "$1" "Failed to generate checksums"
+	done < <(echo "$sources") || die "$1" "Failed to generate checksums"
 }
 
 pkg_verify() {
@@ -866,13 +872,14 @@ pkg_verify() {
         verify_sum=$(pkg_checksums "$pkg")
 
         [ "$verify_sum" ] || continue
-        [ -f "$repo_dir/checksums" ] || die "$pkg" "checksums file missing"
+		checksums=$(pkg_source_query $repo_dir "sha256sums")
+        [ -z "$checksums" ] || die "$pkg" "checksums file missing"
 
         # Check that the first column (separated by whitespace) match in both
         # checksum files. If any part of either file differs, mismatch. Abort.
         printf '%s\n' "$verify_sum" |
 
-        awk "$verify_cmd" - "$repo_dir/checksums" || {
+			awk "$verify_cmd" - < <(echo $checksums) || {
             log "$pkg" "Checksum mismatch"
 
             # Instead of dying above, log it to the terminal. Also define a
@@ -1548,6 +1555,10 @@ args() {
 
     # Rerun the script as root with a fixed environment if needed. We sadly
     # can't run singular functions as root so this is needed.
+    case $action in i|install)
+        die "Install isn't valid."
+    esac
+
     case $action in a|alternatives|i|install|r|remove)
         [ -z "$1" ] || [ -w "$KISS_ROOT/" ] || [ "$uid" = 0 ] || {
             as_root HOME="$HOME" \
@@ -1608,15 +1619,14 @@ args() {
                 # shellcheck disable=2188
                 printf '%s\n' "$sums" |
 
-                if 2>/dev/null >> "$repo_dir/checksums"; then
-                    tee "$repo_dir/checksums"
+                #if 2>/dev/null >> "$repo_dir/checksums"; then
+                #    tee "$repo_dir/checksums"
+                #else
+                #    log "$pkg" "Need permissions to generate checksums"
+                #    file_owner "$repo_dir"
 
-                else
-                    log "$pkg" "Need permissions to generate checksums"
-                    file_owner "$repo_dir"
-
-                    user=$user as_root tee "$repo_dir/checksums"
-                fi
+#                    user=$user as_root tee "$repo_dir/checksums"
+#                fi
 
                 log "$pkg" "Generated checksums"
             done

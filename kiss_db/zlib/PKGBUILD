@@ -1,19 +1,18 @@
 # Maintainer: Pierre Schmitz <pierre@archlinux.de>
 
-pkgbase=zlib
-pkgname=(zlib minizip)
+pkgname=zlib
 epoch=1
 pkgver=1.2.11
 pkgrel=4
 arch=('x86_64')
 license=('custom')
 url="https://www.zlib.net/"
-depends=('glibc')
+depends=('musl')
 options=('staticlibs')  # needed by binutils testsuite
 source=("https://zlib.net/zlib-${pkgver}.tar.gz.asc"
 		"https://zlib.net/zlib-${pkgver}.tar.gz")
-md5sums=('1c9f62f0778697a09d36121ead88e08e'
-         'SKIP')
+sha256sums=('aeee5d17282da556bb399e16d894ebbf22a59138fc6ca96e96614f62e1b5d9d0'
+         	'SKIP')
 validpgpkeys=('5ED46A6721D365587791E2AA783FCD8E58BCAFBA')
 
 prepare() {
@@ -48,16 +47,4 @@ package() {
 	cd ${srcdir}/zlib-$pkgver
 	make install DESTDIR=${pkgdir}
 	install -D -m644 LICENSE ${pkgdir}/usr/share/licenses/zlib/LICENSE
-}
-
-package_minizip() {
-	pkgdesc='Mini zip and unzip based on zlib'
-	depends=('zlib')
-
-	cd ${srcdir}/zlib-$pkgver/contrib/minizip
-	make install DESTDIR=${pkgdir}
-	install -D -m644 ${srcdir}/zlib-$pkgver/LICENSE ${pkgdir}/usr/share/licenses/minizip/LICENSE
-
-	# https://github.com/madler/zlib/pull/229
-	rm ${pkgdir}/usr/include/minizip/crypt.h
 }
