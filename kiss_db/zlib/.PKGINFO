@@ -1,0 +1,7 @@
+pkgname = zlib
+pkgver = 1:1.2.11-4
+pkgdesc = Compression library implementing the deflate compression method found in gzip and PKZIP
+url = https://www.zlib.net/
+size = 378169
+arch = x86_64
+license = custom

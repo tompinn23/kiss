@@ -1,5 +1,4 @@
 # Maintainer: Pierre Schmitz <pierre@archlinux.de>
-
 pkgname=zlib
 epoch=1
 pkgver=1.2.11

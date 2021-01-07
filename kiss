@@ -131,14 +131,15 @@ pkg_lint() {
     log "$1" "Checking repository files"
 
     repo_dir="$(pkg_find "$1")"
-	version="$(pkg_source_query "$repo_dir" "pkgver")"
-	[ -z "$version" ] || die "Package Version not found."
-	#read -r _ release 2>/dev/null < version || die "Version file not found"
 
+	source $repo_dir/PKGBUILD
+	[ -z "${pkgver}" ] && die "Package Version not found."
+	[ "$(type -t build)" = 'funtion' ] && die "Build function not found"
+	#read -r _ release 2>/dev/null < version || die "Version file not found"
 #    [ "$release" ] || die "$1" "Release field not found in version file"
 #    [ -x build ]   || die "$1" "Build file not found or not executable"
 	#    [ -f sources ] || war "$1" "Sources file not found"
-
+	log "$1" "Package is valid"
 }
 
 pkg_source_query() {
@@ -150,8 +151,6 @@ pkg_source_query() {
 		for i in "${!arr}"; do printf '%s\n' "$i"; done
 	fi
 }
-
-
 
 pkg_find() {
     # Figure out which repository a package belongs to by searching for
@@ -181,22 +180,24 @@ pkg_find() {
 pkg_list() {
     # List installed packages. As the format is files and directories, this
     # just involves a simple for loop and file read.
-    cd "$sys_db" 2>/dev/null
+    # cd "$sys_db" 2>/dev/null
 
     # Optional arguments can be passed to check for specific packages. If no
     # arguments are passed, list all.
-    [ "$1" ] || { set +f; set -f -- *; }
+    # [ "$1" ] || { set +f; set -f -- *; }
 
     # Loop over each package and print its name and version.
-    for pkg do
-        [ -d "$pkg" ] || {
-            log "$pkg" "not installed"
-            return 1
-        }
+    #for pkg do
+	#	printf '%s\n' "$pkg"
+    #   [ -d "$pkg" ] || {
+    #        log "$pkg" "not installed"
+    #        return 1
+    #    }
 
-        read -r version 2>/dev/null < "$pkg/version" || version=null
-        printf '%s\n' "$pkg $version"
-    done
+        #read -r version 2>/dev/null < "$pkg/version" || version=null
+        #printf '%s\n' "$pkg $version"
+    #done
+	pacman -Q "$1"
 }
 
 pkg_cache() {
@@ -389,7 +390,6 @@ pkg_depends() {
         [ "$3" ] && [ -z "$2" ] && (pkg_list "$1" >/dev/null) && return
 
         dependencies=$(pkg_source_query "$(pkg_find "$1")" "depends")
-        printf "%s\n" $dependencies
         # Recurse through the dependencies of the child packages.
         while read -r dep _ || [ "$dep" ]; do
             [ "${dep##\#*}" ] && pkg_depends "$dep" '' "$3"
@@ -582,6 +582,121 @@ pkg_etcsums() (
     done > "$pkg_dir/$1/$pkg_db/$1/etcsums"
 )
 
+find_libdepends() {
+	local d sodepends
+
+	sodepends=0
+	for d in "${depends[@]}"; do
+		if [[ $d = *.so ]]; then
+			sodepends=1
+			break
+		fi
+	done
+
+	if (( sodepends == 0 )); then
+		(( ${#depends[@]} )) && printf '%s\n' "${depends[@]}"
+		return 0
+	fi
+
+	local libdeps filename soarch sofile soname soversion
+	declare -A libdeps
+
+	while IFS= read -rd '' filename; do
+		# get architecture of the file; if soarch is empty it's not an ELF binary
+		soarch=$(LC_ALL=C readelf -h "$filename" 2>/dev/null | sed -n 's/.*Class.*ELF\(32\|64\)/\1/p')
+		[[ -n "$soarch" ]] || continue
+
+		# process all libraries needed by the binary
+		for sofile in $(LC_ALL=C readelf -d "$filename" 2>/dev/null | sed -nr 's/.*Shared library: \[(.*)\].*/\1/p')
+		do
+			# extract the library name: libfoo.so
+			soname="${sofile%.so?(+(.+([0-9])))}".so
+			# extract the major version: 1
+			soversion="${sofile##*\.so\.}"
+
+			if [[ ${libdeps[$soname]} ]]; then
+				if [[ ${libdeps[$soname]} != *${soversion}-${soarch}* ]]; then
+					libdeps[$soname]+=" ${soversion}-${soarch}"
+				fi
+			else
+				libdeps[$soname]="${soversion}-${soarch}"
+			fi
+		done
+	done < <(find "$pkgdir" -type f -perm -u+x -print0)
+
+	local libdepends v
+	for d in "${depends[@]}"; do
+		case "$d" in
+			*.so)
+				if [[ ${libdeps[$d]} ]]; then
+					for v in ${libdeps[$d]}; do
+						libdepends+=("$d=$v")
+					done
+				else
+					warning "$(gettext "Library listed in %s is not required by any files: %s")" "'depends'" "$d"
+					libdepends+=("$d")
+				fi
+				;;
+			*)
+				libdepends+=("$d")
+				;;
+		esac
+	done
+
+	(( ${#libdepends[@]} )) && printf '%s\n' "${libdepends[@]}"
+}
+
+
+find_libprovides() {
+	local p libprovides missing
+	for p in "${provides[@]}"; do
+		missing=0
+		case "$p" in
+			*.so)
+				mapfile -t filename < <(find "$pkgdir" -type f -name $p\* | LC_ALL=C sort)
+				if [[ $filename ]]; then
+					# packages may provide multiple versions of the same library
+					for fn in "${filename[@]}"; do
+						# check if we really have a shared object
+						if LC_ALL=C readelf -h "$fn" 2>/dev/null | grep -q '.*Type:.*DYN (Shared object file).*'; then
+							# get the string binaries link to (e.g. libfoo.so.1.2 -> libfoo.so.1)
+							local sofile=$(LC_ALL=C readelf -d "$fn" 2>/dev/null | sed -n 's/.*Library soname: \[\(.*\)\].*/\1/p')
+							if [[ -z "$sofile" ]]; then
+								warning "$(gettext "Library listed in %s is not versioned: %s")" "'provides'" "$p"
+								libprovides+=("$p")
+								continue
+							fi
+
+							# get the library architecture (32 or 64 bit)
+							local soarch=$(LC_ALL=C readelf -h "$fn" | sed -n 's/.*Class.*ELF\(32\|64\)/\1/p')
+
+							# extract the library major version
+							local soversion="${sofile##*\.so\.}"
+
+							libprovides+=("${p}=${soversion}-${soarch}")
+						else
+							warning "$(gettext "Library listed in %s is not a shared object: %s")" "'provides'" "$p"
+							libprovides+=("$p")
+						fi
+					done
+				else
+					libprovides+=("$p")
+					missing=1
+				fi
+				;;
+			*)
+				libprovides+=("$p")
+				;;
+		esac
+
+		if (( missing )); then
+			warning "$(gettext "Cannot find library listed in %s: %s")" "'provides'" "$p"
+		fi
+	done
+
+	(( ${#libprovides[@]} )) && printf '%s\n' "${libprovides[@]}"
+}
+
 write_kv_pair() {                                                               
     local key="$1"                                                              
     shift                                                                       
@@ -625,7 +740,7 @@ write_pkginfo() {
     write_kv_pair "builddate" "$SOURCE_DATE_EPOCH"                              
     write_kv_pair "packager" "$PACKAGER"                                        
     write_kv_pair "size" "$size"                                                
-    write_kv_pair "arch" "$pkgarch"                                             
+    write_kv_pair "arch" "$arch"                                             
                                                                                 
     mapfile -t provides < <(find_libprovides)                                   
     mapfile -t depends < <(find_libdepends)                                     
@@ -648,24 +763,31 @@ pkg_tar() (
     log "$1" "Creating tarball"
 
     # Read the version information to name the package.
-    read -r version release < "$(pkg_find "$1")/version"
+    #read -r version release < "$(pkg_find "$1")/version"
 
+	#fakeroot -- env LANG=C bsdtar -cf - .MTREE .PKGINFO * | xz -c -z - > $pkgname-$pkgver-$pkgrel-$arch.tar.xz
+
+	pkgver="$(pkg_source_query "$repo_dir" "pkgver")"
+	pkgrel="$(pkg_source_query "$repo_dir" "pkgrel")"
+	arch="$(pkg_source_query "$repo_dir" "arch")"
     # Use 'cd' to avoid needing tar's '-C' flag which may not be portable
     # across implementations.
     cd "$pkg_dir/$1"
-	write_pkginfo "$(pkg_find "$1")/PKGBUILD"	
+	write_pkginfo "$(pkg_find "$1")/PKGBUILD" > .PKGINFO	
+	sed -i '/^[a-z]* = ./!d' .PKGINFO
+	set +f
 	fakeroot -- env LANG=C bsdtar -czf .MTREE --format=mtree --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' .PKGINFO *
 	
     # Create a tarball from the contents of the built package.
-    tar cf - . | case ${KISS_COMPRESS:=gz} in
+    fakeroot -- env LANG=C bsdtar -cf - .MTREE .PKGINFO * | case ${KISS_COMPRESS:=gz} in
         bz2)  bzip2 -z ;;
         gz)   gzip -6  ;;
         lzma) lzma -z  ;;
         lz)   lzip -z  ;;
         xz)   xz -zT 0 ;;
         zst)  zstd -z  ;;
-    esac > "$bin_dir/$1@$version-$release.tar.${KISS_COMPRESS:=gz}"
-
+    esac > "$bin_dir/$1-$pkgver-$pkgrel-$arch.tar.${KISS_COMPRESS:=gz}"
+	set -f
     log "$1" "Successfully created tarball"
     run_hook post-package "$1"
 )
@@ -743,7 +865,9 @@ pkg_build() {
         cd "$mak_dir/$pkg"
 
         # Log the version so we can pass it to the package build file.
-        read -r build_version _ < "$repo_dir/version"
+        #read -r build_version _ < "$repo_dir/version"
+		build_version=$(pkg_source_query "$repo_dir" "pkgver")
+	
 
         log "$pkg" "Starting build"
         run_hook pre-build "$pkg" "$pkg_dir/$pkg"
@@ -873,7 +997,7 @@ pkg_verify() {
 
         [ "$verify_sum" ] || continue
 		checksums=$(pkg_source_query $repo_dir "sha256sums")
-        [ -z "$checksums" ] || die "$pkg" "checksums file missing"
+        [ -z "$checksums" ] && die "$pkg" "checksums file missing"
 
         # Check that the first column (separated by whitespace) match in both
         # checksum files. If any part of either file differs, mismatch. Abort.
